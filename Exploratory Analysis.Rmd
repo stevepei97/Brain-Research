@@ -1,0 +1,201 @@
+---
+title: "Exploratory Analysis"
+author: "Zhonghan Pei"
+date: "2/27/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Read the Data Set
+```{r, echo=FLASE}
+library(gdata)
+clinc<-read.xls("20190220_Clinc.xlsx",sheet = 2,header = T)
+library(readr)
+brain_data <- read_csv("RSPW.csv")
+```
+
+##Extract Age, Sex, BMI, Diet Data
+```{r,echo=FALSE}
+library(dplyr)
+new_clinc <- clinc[,c(5,6,7,33,34,35,36,37,38,39,40,41,42,43,47,48)]
+new_clinc[31,9] = 0
+new_clinc$Veg <- rowSums(new_clinc[,c(8,9,10,11,12,13,14)])
+new_clinc$Amc <- rowSums(new_clinc[,c(4,5)])
+new_clinc$Med <- rowSums(new_clinc[,c(6,7)])
+
+new_clinc$diet <- ifelse(new_clinc$Veg == 1 | new_clinc$Veg == 2, "Veg", ifelse((new_clinc$Amc == 1 | new_clinc$Amc == 2) & (new_clinc$Amc > new_clinc$Med), "Amc", ifelse(new_clinc$Med == 1 | new_clinc$Med == 2, "Med", NA)))
+
+new_clinc$diet[180] = "Amc"
+new_clinc$diet[164] = "Med"
+new_clinc$diet[155] = "Med"
+new_clinc$diet[142] = "Med"
+new_clinc$diet[126] = "Amc"
+new_clinc$diet[117] = "Med"
+new_clinc$diet[90] = "Amc"
+new_clinc$diet[67] = "Med"
+new_clinc$diet[65] = "Med"
+new_clinc$diet[56] = "Amc"
+new_clinc$diet[18] = "Med"
+
+new_clinc$obs <- ifelse(new_clinc$BMI < 25, "Lean", ifelse((new_clinc$BMI >= 25 & new_clinc$BMI < 30) , "Over", "Obese"))
+
+#count(new_clinc[new_clinc$Sex == 1,])
+#count(new_clinc[new_clinc$Sex == 2,])
+
+library(dplyr)
+set.seed(12345)
+new_sample <- rbind(new_clinc[new_clinc$Sex == 1,],sample_n(new_clinc[new_clinc$Sex == 2,],66))
+```
+Binomial P-value Test
+```{r}
+##Sexuality by ratio
+#sum(47+17+2)/185
+##Test if American standard diet has sexual perferences
+#pbinom(47, size=(47+85), prob=(sum(47+17+2)/185))
+##Test if Mediterrean diet has sexual perferences
+#pbinom(17, size = 34, prob = (sum(47+17+2)/185))
+##Test if Vegetarian diet has sexual perferences
+#pbinom(2, size = 19, prob = (sum(47+17+2)/185))
+
+bi_test1 <- binom.test(47,(47+85),(sum(47+17+2)/185),alternative="two.sided")
+bi_test1$p.value
+
+bi_test2 <- binom.test(17,(34),(sum(47+17+2)/185),alternative="two.sided")
+bi_test2$p.value
+
+bi_test3 <- binom.test(2,(19),(sum(47+17+2)/185),alternative="two.sided")
+bi_test3$p.value
+```
+
+Table of all groups
+```{r}
+num1 <- c(nrow(new_clinc[(new_clinc$Sex == 1 & new_clinc$diet == "Amc"),]),nrow(new_clinc[(new_clinc$Sex == 2 & new_clinc$diet == "Amc"),]))
+
+num2 <- c(nrow(new_clinc[(new_clinc$Sex == 1 & new_clinc$diet == "Med"),]),nrow(new_clinc[(new_clinc$Sex == 2 & new_clinc$diet == "Med"),]))
+
+num3 <- c(nrow(new_clinc[(new_clinc$Sex == 1 & new_clinc$diet == "Veg"),]),nrow(new_clinc[(new_clinc$Sex == 2 & new_clinc$diet == "Veg"),]))
+
+diet_1 <- c(rep(c("Amc"),2),rep(c("Med"),2),rep(c("Veg"),2))
+
+sex_1 <- c(rep(c("Male","Female"),3))
+
+num <- c(num1, num2, num3)
+
+data1 <- data.frame(num,diet_1,sex_1)
+data1
+
+
+```
+
+From the results above we can reject the null hypothesis that the sexuality has no difference on dietary choices.Therefore, sexuality does affect our dietary choices especially in Vegetarian diet.
+
+##Boostrapping Test on Obesity and Diet
+
+Table of all groups
+```{r}
+num1 <- c(nrow(new_clinc[(new_clinc$obs == "Obese" & new_clinc$diet == "Amc"),]),nrow(new_clinc[(new_clinc$obs == "Over" & new_clinc$diet == "Amc"),]),nrow(new_clinc[(new_clinc$obs == "Lean" & new_clinc$diet == "Amc"),]))
+
+num2 <- c(nrow(new_clinc[(new_clinc$obs == "Obese" & new_clinc$diet == "Med"),]),nrow(new_clinc[(new_clinc$obs == "Over" & new_clinc$diet == "Med"),]),nrow(new_clinc[(new_clinc$obs == "Lean" & new_clinc$diet == "Med"),]))
+
+num3 <-c(nrow(new_clinc[(new_clinc$obs == "Obese" & new_clinc$diet == "Veg"),]),nrow(new_clinc[(new_clinc$obs == "Over" & new_clinc$diet == "Veg"),]),nrow(new_clinc[(new_clinc$obs == "Lean" & new_clinc$diet == "Veg"),]))
+
+diet_1 <- c(rep(c("Amc"),3),rep(c("Med"),3),rep(c("Veg"),3))
+
+obs_1 <- c(rep(c("Obese","Over","Lean"),3))
+
+num <- c(num1, num2, num3)
+
+data <- data.frame(num,diet_1,obs_1)
+data
+
+
+```
+
+Collect BMI datasets 
+
+```{r}
+BMI_data <-data.frame(BMI = new_clinc$BMI,diet = new_clinc$diet)
+
+bootstrapping <- function(x,y,R){
+  ##Calculate original test statistic
+  t_orig = t.test(x,y, alternative = "two.sided")$statistic
+  x_1 <- x - mean(x) + mean(c(x,y))
+  y_1 <- y - mean(y) + mean(c(x,y))
+  ##Create Null vector
+  test_stats <- NULL
+  ##Test statistic for each iteration
+  for (i in 1:R) {
+    x_s <- sample(x_1, size = length(x),replace = TRUE)
+    y_s <- sample(y_1,size = length(y),replace = TRUE)
+    test_stats<-c(test_stats,t.test(x_s,y_s, alternative = "two.sided")$statistic)
+  }
+  ##Return the p-value for testing equal mean
+  return(sum(test_stats > t_orig)/length(test_stats))
+}
+
+BMI_amc <- BMI_data[BMI_data$diet == "Amc",1]
+
+BMI_med <- BMI_data[BMI_data$diet == "Med",1]
+
+BMI_veg <- BMI_data[BMI_data$diet == "Veg",1]
+
+
+summary(BMI_amc)
+summary(BMI_med)
+summary(BMI_veg)
+bootstrapping(BMI_amc,BMI_med, 1000)
+t.test(BMI_amc,BMI_med, alternative = "two.sided")$statistic
+bootstrapping(BMI_amc,BMI_veg, 1000)
+t.test(BMI_amc,BMI_veg, alternative = "two.sided")$statistic
+bootstrapping(BMI_med,BMI_veg, 1000)
+t.test(BMI_med,BMI_veg, alternative = "two.sided")$statistic
+
+
+hist(BMI_data$BMI)
+```
+
+From the results that we can conclude that in our data patients taking American standard diet have significantly different BMI than those who take Mediterrean diet.
+
+```{r}
+par(mfrow = c(3,1))
+hist(BMI_amc,col = "red",main = "Histogram BMI for American Standard Diet")
+
+hist(BMI_med,col="blue",main = "Histogram BMI for Mediterrean Diet")
+
+hist(BMI_veg,col = "green",main = "Histogram BMI for Vegetarian Diet")
+```
+
+##Food addiction 
+```{r}
+YFAS <- clinc[,c("Sex","BMI","YFAS_SymptomCount")]
+YFAS$YFhigh <- ifelse(YFAS$YFAS_SymptomCount < 2, "low","high")
+YFAS <- YFAS[complete.cases(YFAS),]
+# nrow(YFAS[YFAS$Sex == 1,]) 60
+# nrow(YFAS[YFAS$Sex == 2,]) 110
+# nrow(YFAS[YFAS$YFhigh == "high",]) 58
+# nrow(YFAS[YFAS$YFhigh == "low",]) 112
+# nrow(YFAS[YFAS$YFhigh == "high" & YFAS$Sex == 1,]) 16
+# nrow(YFAS[YFAS$YFhigh == "high" & YFAS$Sex == 2,]) 42
+# nrow(YFAS[YFAS$YFhigh == "low" & YFAS$Sex == 1,]) 44
+# nrow(YFAS[YFAS$YFhigh == "low" & YFAS$Sex == 2,]) 68
+bi_test1 <- binom.test(16,(16+42),(60/170),alternative="two.sided")
+bi_test1$p.value
+
+bi_test2 <- binom.test(44,(44+68),(60/185),alternative="two.sided")
+bi_test2$p.value
+
+BMI_high <- YFAS$BMI[YFAS$YFhigh=="high"]
+
+BMI_low <- YFAS$BMI[YFAS$YFhigh=="low"]
+
+bootstrapping(BMI_high,BMI_low, 1000)
+t.test(BMI_high,BMI_low, alternative = "two.sided")$statistic
+```
+From the above result we can clearly say that YFAS food addiction score can greatly affect BMI.
+
+

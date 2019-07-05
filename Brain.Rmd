@@ -1,0 +1,428 @@
+---
+title: "Braindata"
+author: "Zhonghan Pei"
+date: "4/10/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Read the data
+```{r,warning=FALSE,echo=FALSE}
+library(readr)
+brain_data <- read_csv("RSPW.csv")
+library(gdata)
+clinc<-read.xls("20190220_Clinc.xlsx",sheet = 2,header = T)
+```
+
+```{r,echo=FALSE}
+library(dplyr)
+new_clinc <- clinc[,c(1,5,6,7,33,34,35,36,37,38,39,40,41,42,43,47,48)]
+new_clinc[31,10] = 0
+new_clinc$Veg <- rowSums(new_clinc[,c(9,10,11,12,13,14,15)])
+new_clinc$Amc <- rowSums(new_clinc[,c(5,6)])
+new_clinc$Med <- rowSums(new_clinc[,c(7,8)])
+
+new_clinc$diet <- ifelse(new_clinc$Veg == 1 | new_clinc$Veg == 2, "Veg", ifelse((new_clinc$Amc == 1 | new_clinc$Amc == 2) & (new_clinc$Amc > new_clinc$Med), "Amc", ifelse(new_clinc$Med == 1 | new_clinc$Med == 2, "Med", NA)))
+
+new_clinc$diet[180] = "Amc"
+new_clinc$diet[164] = "Med"
+new_clinc$diet[155] = "Med"
+new_clinc$diet[142] = "Med"
+new_clinc$diet[126] = "Amc"
+new_clinc$diet[117] = "Med"
+new_clinc$diet[90] = "Amc"
+new_clinc$diet[67] = "Med"
+new_clinc$diet[65] = "Med"
+new_clinc$diet[56] = "Amc"
+new_clinc$diet[18] = "Med"
+
+new_clinc$obs <- ifelse(new_clinc$BMI < 25, "Lean", "Over")
+#ifelse((new_clinc$BMI >= 25 & new_clinc$BMI < 30) , "Over", "Obese"))
+
+new_clinc <- new_clinc[order(new_clinc$NDPNum),]
+col_names <- colnames(new_clinc)
+col_names1 <- colnames(brain_data)[-1]
+new_clinc1 <- merge(new_clinc,brain_data, by.x="NDPNum", by.y="Subject_ID")
+new_clinc <- new_clinc1[,col_names]
+new_brain <- new_clinc1[,col_names1]
+```
+
+Brainstem
+Nucleus accumbens (NACC)
+Putamen (Put)
+Caudate Nucleus (CaN)
+Globus Pallidum (Pal)
+```{r,echo=FALSE}
+library(dplyr)
+library(stringr)
+strings <- c("B_Bstem","Pal","CaN","Pu","Nacc")
+new_brain <- new_brain[,str_detect(colnames(new_brain), paste(strings, collapse = "|"))]
+
+set.seed(12345)
+training_sample <- sample(nrow(new_brain),nrow(new_brain)*0.7)
+new_brain_train <- new_brain[training_sample,]
+new_brain_test <- new_brain[-training_sample,]
+```
+
+```{r,echo=FALSE}
+library(ggbiplot)
+##Brain PCA 
+pca_brain <- prcomp(new_brain,scale = TRUE)
+ggbiplot(pca_brain,choices=c(1,2),obs.scale = 1, var.scale = 1,groups = new_clinc$obs,ellipse = TRUE,var.axes=FALSE)
+
+pca_brain <- prcomp(new_brain_train,scale = TRUE)
+summ_pca<-summary(pca_brain)
+```
+
+##Loadings and Principal components
+```{r}
+##Percentage of variances explained by our 20 principal components
+sum(summ_pca$importance[2,1:20])
+
+##Get the rotation matrix or loadings from pca results
+rotation_matrix <- pca_brain$rotation[,1:20]
+
+##Convert to matrix form
+matrix_train <- matrix(as.numeric(unlist(new_brain_train)),nrow =129)
+
+##New matrix with 20 principal components
+train_PC20 <- matrix_train%*%rotation_matrix
+train_PC20 <- as.data.frame(train_PC20)
+diet_train <- new_clinc$diet[training_sample]
+
+##Predict diet using the 20 principal components we collect
+
+library(nnet)
+glm.fit = multinom(diet_train~.,data = train_PC20)
+summary(glm.fit)
+
+##Loadings for PC1
+head(rotation_matrix[order(rotation_matrix[,1]),1])
+
+tail(rotation_matrix[order(rotation_matrix[,1]),1])
+
+##Loadings for PC2
+head(rotation_matrix[order(rotation_matrix[,2]),2])
+
+tail(rotation_matrix[order(rotation_matrix[,2]),2])
+```
+
+##Lets predict our testing data sets using logistic regression model we have 
+```{r,echo=FALSE}
+##Get the testing data
+matrix_test <- matrix(as.numeric(unlist(new_brain_test)),nrow =nrow(new_brain_test))
+
+test_PC20 <- matrix_test%*%rotation_matrix
+test_PC20 <- as.data.frame(test_PC20)
+
+
+##Predicted values for testing set
+predicted_test <- glm.fit %>% predict(test_PC20)
+diet_test<- new_clinc$diet[-training_sample]
+
+##Cross Validation score
+sum(predicted_test == new_clinc$diet[-training_sample])/length(predicted_test)
+
+
+##Predicted values for training set
+predicted_train <- glm.fit %>% predict(train_PC20)
+
+sum(predicted_train == diet_train)/length(predicted_train)
+```
+
+##Lets predict our testing data using KNN
+```{r,echo=FALSE}
+knn_train_PC20 <- cbind(train_PC20,diet = diet_train)
+knn_test_PC20 <- cbind(test_PC20, diet = diet_test)
+```
+
+```{r}
+library(DMwR)
+knn_test <-kNN(diet~.,knn_train_PC20,knn_test_PC20, norm = TRUE, k =5)
+sum(knn_test==diet_test)/length(knn_test)
+```
+
+##Lets predict our result in random forest
+```{r}
+library(randomForest)
+set.seed(12345)
+rf <- randomForest(diet~., data = knn_train_PC20, ntree = 500, mtry = 10)
+##Prediction model test for training set
+rf_predicted <- predict(rf, knn_train_PC20,type = "class")
+table(rf_predicted, diet_train)
+
+##Prediction model test for testing set
+rf_predicted_test <- predict(rf, knn_test_PC20,type = "class")
+table(rf_predicted_test,diet_test)
+
+sum(rf_predicted_test == diet_test)/length(diet_test)
+```
+
+##Lets predict our result in neural network
+```{r}
+library(nnet)
+set.seed(12345)
+nn <- nnet(diet~., data = knn_train_PC20, maxit = 150,size = 4)
+##Prediction model test for training set
+table(predict(nn, knn_train_PC20,type = "class"),diet_train)
+sum(predict(nn, knn_train_PC20,type = "class") == diet_train)/(length(diet_train))
+
+##Prediction model test for testing set
+table(predict(nn, knn_test_PC20,type = "class"),diet_test)
+sum(predict(nn, knn_test_PC20,type = "class") == diet_test)/(length(diet_test))
+
+```
+
+##Prediction Using 40 PCs
+```{r}
+##Percentage of variances explained by our 40 principal components
+sum(summ_pca$importance[2,1:40])
+
+##Get the rotation matrix or loadings from pca results
+rotation_matrix_40 <- pca_brain$rotation[,1:40]
+
+##Convert to matrix form
+matrix_train <- matrix(as.numeric(unlist(new_brain_train)),nrow =129)
+
+##New matrix with 20 principal components
+train_PC40 <- matrix_train%*%rotation_matrix_40
+train_PC40 <- as.data.frame(train_PC40)
+diet_train_40 <- new_clinc$diet[training_sample]
+
+##Predict diet using the 20 principal components we collect
+
+library(nnet)
+glm.fit = multinom(diet_train_40~.,data = train_PC40)
+summary(glm.fit)
+```
+
+##Lets predict our testing data sets using logistic regression model we have 
+```{r}
+##Get the testing data
+matrix_test <- matrix(as.numeric(unlist(new_brain_test)),nrow =nrow(new_brain_test))
+
+test_PC40 <- matrix_test%*%rotation_matrix_40
+test_PC40 <- as.data.frame(test_PC40)
+
+
+##Predicted values for testing set
+predicted_test_40 <- glm.fit %>% predict(test_PC40)
+diet_test_40<- new_clinc$diet[-training_sample]
+
+
+##Predicted values for training set
+predicted_train_40 <- glm.fit %>% predict(train_PC40)
+
+sum(predicted_train == diet_train)/length(predicted_train_40)
+
+##Cross Validation score
+sum(predicted_test_40 == new_clinc$diet[-training_sample])/length(predicted_test_40)
+```
+
+##Lets predict our testing data using KNN
+```{r}
+knn_train_PC40 <- cbind(train_PC40,diet = diet_train_40)
+knn_test_PC40 <- cbind(test_PC40, diet = diet_test_40)
+
+library(DMwR)
+knn_test <-kNN(diet~.,knn_train_PC40,knn_test_PC40, norm = TRUE, k =5)
+sum(knn_test==diet_test_40)/length(knn_test)
+```
+
+##Lets predict our result in random forest
+```{r}
+library(randomForest)
+set.seed(12345)
+rf <- randomForest(diet~., data = knn_train_PC40, ntree = 600, mtry = 10)
+##Prediction model test for training set
+rf_predicted <- predict(rf, knn_train_PC40,type = "class")
+table(rf_predicted, diet_train_40)
+
+##Prediction model test for testing set
+rf_predicted_test <- predict(rf, knn_test_PC40,type = "class")
+table(rf_predicted_test,diet_test)
+
+sum(rf_predicted_test == diet_test_40)/length(diet_test_40)
+
+```
+
+```{r}
+library(nnet)
+set.seed(12345)
+nn <- nnet(diet~., data = knn_train_PC40, maxit = 150,size = 4)
+##Prediction model test for training set
+table(predict(nn, knn_train_PC40,type = "class"),diet_train_40)
+sum(predict(nn, knn_train_PC40,type = "class") == diet_train_40)/(length(diet_train_40))
+
+##Prediction model test for testing set
+table(predict(nn, knn_test_PC40,type = "class"),diet_test_40)
+sum(predict(nn, knn_test_PC40,type = "class") == diet_test_40)/(length(diet_test_40))
+```
+
+##Brain PCA 
+```{r}
+pca_brain <- prcomp(new_brain,scale = TRUE)
+ggbiplot(pca_brain,choices=c(1,2),obs.scale = 1, var.scale = 1,groups = new_clinc$obs,ellipse = TRUE,var.axes=FALSE)
+```
+
+Hiereachical Analysis
+```{r,echo=FALSE}
+library(tidyverse)  # data manipulation
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering visualization
+library(dendextend) # for comparing two dendrograms
+scale_new_brain <- scale(new_brain)
+
+# Dissimilarity matrix
+d1 <- dist(scale_new_brain, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d1, method = "complete" )
+
+# Plot the obtained dendrogram
+plot(hc1, cex = 0.6, hang = -1)
+
+##Amc Group
+amc_brain <- new_brain[which(new_clinc$diet=="Amc"),]
+scale_amc_brain <- scale(amc_brain)
+
+# Dissimilarity matrix
+d2 <- dist(scale_amc_brain, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d2, method = "complete" )
+
+# Plot the obtained dendrogram
+plot(hc1, cex = 0.6, hang = -1)
+
+##Med Group
+med_brain <- new_brain[which(new_clinc$diet=="Med"),]
+scale_med_brain <- scale(med_brain)
+
+# Dissimilarity matrix
+d3 <- dist(scale_med_brain, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d3, method = "complete" )
+
+# Plot the obtained dendrogram
+plot(hc1, cex = 0.6, hang = -1)
+
+##Veg Group
+veg_brain <- new_brain[which(new_clinc$diet=="Veg"),]
+scale_veg_brain <- scale(veg_brain)
+
+# Dissimilarity matrix
+d4 <- dist(scale_veg_brain, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d4, method = "complete" )
+
+# Plot the obtained dendrogram
+plot(hc1, cex = 0.6, hang = -1)
+```
+
+##Lets deal with our food addiction table
+```{r}
+library(stringr)
+YFAS_new <- clinc[,c("NDPNum","Sex","BMI","YFAS_SymptomCount")]
+
+YFAS_new <- merge(YFAS_new, new_clinc[,c("NDPNum","diet","obs")],by = "NDPNum")
+
+YFAS_new1 <- merge(YFAS_new,brain_data, by.x="NDPNum", by.y="Subject_ID")
+YFAS_new1 <- YFAS_new1[complete.cases(YFAS_new1),]
+YFAS <- YFAS_new1[,c("Sex","BMI","YFAS_SymptomCount","obs","diet")]
+YFAS$YFhigh <- ifelse(YFAS$YFAS_SymptomCount < 2, "low","high")
+
+new_brain_Y <- YFAS_new1[,str_detect(colnames(YFAS_new1), paste(strings, collapse = "|"))]
+set.seed(12345)
+training_sample <- sample(nrow(new_brain_Y),nrow(new_brain_Y)*0.7)
+new_brain_Y_train <- new_brain_Y[training_sample,]
+new_brain_Y_test <- new_brain_Y[-training_sample,]
+# YFAS[complete.cases(YFAS),]
+```
+
+```{r}
+library(ggbiplot)
+##Brain PCA 
+pca_brain <- prcomp(new_brain_Y,scale = TRUE)
+ggbiplot(pca_brain,choices=c(1,2),obs.scale = 1, var.scale = 1,groups = YFAS$YFhigh,ellipse = TRUE,var.axes=FALSE)
+
+pca_brain <- prcomp(new_brain_Y_train,scale = TRUE)
+summ_pca<-summary(pca_brain)
+```
+
+```{r}
+##Percentage of variances explained by our 20 principal components
+sum(summ_pca$importance[2,1:20])
+
+##Get the rotation matrix or loadings from pca results
+rotation_matrix <- pca_brain$rotation[,1:20]
+
+##Convert to matrix form
+matrix_train <- matrix(as.numeric(unlist(new_brain_Y_train)),nrow =118)
+
+##New matrix with 20 principal components
+train_PC20 <- matrix_train%*%rotation_matrix
+train_PC20 <- as.data.frame(train_PC20)
+YFAS_train <- YFAS_new$YFhigh[training_sample]
+
+##Predict diet using the 20 principal components we collect
+
+library(nnet)
+glm.fit = multinom(YFAS_train~.,data = train_PC20)
+summary(glm.fit)
+```
+
+```{r}
+##Get the testing data
+matrix_test <- matrix(as.numeric(unlist(new_brain_Y_test)),nrow =nrow(new_brain_Y_test))
+
+test_PC20 <- matrix_test%*%rotation_matrix
+test_PC20 <- as.data.frame(test_PC20)
+
+
+##Predicted values for testing set
+predicted_test <- glm.fit %>% predict(test_PC20)
+YFAS_test <- YFAS_new$YFhigh[-training_sample]
+
+##Cross Validation score
+sum(predicted_test == YFAS_test)/length(predicted_test)
+
+
+##Predicted values for training set
+predicted_train <- glm.fit %>% predict(train_PC20)
+
+sum(predicted_train == YFAS_train)/length(predicted_train)
+```
+
+##Lets use KNN
+```{r}
+knn_train_PC20 <- cbind(train_PC20,YFAS = YFAS_train)
+knn_test_PC20 <- cbind(test_PC20, YFAS = YFAS_test)
+
+library(DMwR)
+knn_test <-kNN(YFAS~.,knn_train_PC20,knn_test_PC20, norm = TRUE, k =5)
+sum(knn_test==YFAS_test)/length(knn_test)
+```
+
+##Lets use random forest
+```{r,}
+library(randomForest)
+set.seed(12345)
+rf <- randomForest(YFAS~., data = knn_train_PC20, ntree = 500, mtry = 10)
+##Prediction model test for training set
+rf_predicted <- predict(rf, knn_train_PC20,type = "class")
+table(rf_predicted, YFAS_train)
+
+##Prediction model test for testing set
+rf_predicted_test <- predict(rf, knn_test_PC20,type = "class")
+table(rf_predicted_test,YFAS_test)
+
+sum(rf_predicted_test == YFAS_test)/length(YFAS_test)
+```
